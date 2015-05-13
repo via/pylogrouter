@@ -9,13 +9,13 @@ class RouterNode():
 
     def __init__(self):
         self.consumers = []
-        self.stats = { "eventsReceived": 0,
+        self.stats = { "eventsConsumed": 0,
                        "eventsDelivered": 0,
-                       "failedDeliveres": 0,
-                       "failedReceives": 0 }
+                       "failedConsumed": 0,
+                       "failedDelivered": 0 }
                             
  
-    def addConsumer(self, consumer):
+    def add_consumer(self, consumer):
         self.consumers.append(consumer)
 
     def deliver(self, event):
@@ -23,10 +23,11 @@ class RouterNode():
             if consumer.consume(event):
                 self.stats['eventsDelivered'] += 1
             else:
-                self.stats['failedDeliveries'] += 1
+                self.stats['failedDelivered'] += 1
 
     def consume(event):
         self.deliver(event)
+        self.stats['eventsConsumed'] += 1
 
     def statistics(self):
         return self.stats
@@ -34,6 +35,7 @@ class RouterNode():
 class SyslogWrapper(pysyslog.SyslogProtocol):
     maxbuffersize = 1024 * 1024 * 1024
     def __init__(self, source):
+        pysyslog.SyslogProtocol.__init__(self)
         self.source = source
 
     def handle_event(self, event):
@@ -46,21 +48,24 @@ class SyslogWrapper(pysyslog.SyslogProtocol):
         self.source.overflow()
 
 class SyslogSource(pysyslog.SyslogProtocol, RouterNode):
-    maxbuffersize = 1024 * 1024 * 1024
     def __init__(self, address, tcp=False):
         RouterNode.__init__(self)
         loop = asyncio.get_event_loop()
-        self.coro = loop.create_datagram_endpoint(lambda: SyslogWrapper(self), address)
+        if tcp:
+            self.coro = loop.create_server(lambda: SyslogWrapper(self), address[0], address[1])
+        else:
+            self.coro = loop.create_datagram_endpoint(lambda: SyslogWrapper(self), address)
         loop.run_until_complete(self.coro)
 
     def handle_event(self, event):
+        self.stats['eventsConsumed'] += 1
         RouterNode.deliver(self, event) 
 
     def decode_error(self, str):
-        pass
+        self.stats['failedConsumed'] += 1
 
     def overflow(self):
-        pass 
+        self.stats['failedConsumed'] += 1
 
 class MemoryPipe(RouterNode):
     def __init__(self, size):
@@ -73,9 +78,9 @@ class MemoryPipe(RouterNode):
         try:
             self.pipe.put_nowait(event)
         except asyncio.QueueFull:
-            self.stats['failedReceives'] += 1
+            self.stats['failedConsumed'] += 1
             return False
-        self.stats['eventsReceived'] += 1
+        self.stats['eventsConsumed'] += 1
         return True
 
     @asyncio.coroutine
@@ -91,8 +96,14 @@ class MemoryPipe(RouterNode):
 
 
 class PrinterSink(RouterNode):
+    def __init__(self):
+        RouterNode.__init__(self)
+        self.stats = {"eventsConsumed": 0} 
+
     def consume(self, event):
-        print(event)
+        self.stats['eventsConsumed'] += 1
+    #    print(event)
+        return True
  
 class HTTPSink(RouterNode):
     def __init__(self, uri, timeout):

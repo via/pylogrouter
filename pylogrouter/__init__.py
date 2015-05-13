@@ -1,26 +1,37 @@
-import aiohttp
+import aiohttp.web
 import asyncio
+import json
 
 class Agent():
     def __init__(self, name):
         self.name = name
         self.nodes = {}
 
-    def addNode(self, name, node):
+    def add_node(self, name, node):
         self.nodes[name] = node
 
-    def connectNode(self, node1, node2):
-        self.nodes[node1].addConsumer(self.nodes[node2])
+    def connect_node(self, node1, node2):
+        self.nodes[node1].add_consumer(self.nodes[node2])
 
-    def getNodes(self):
+    def get_nodes(self):
         return self.nodes.keys()
+
+    def get_node(self, name):
+        return self.nodes[name]
 
 class HTTPStatisticsReporter():
     def __init__(self, address, port, agent):
-        pass
+        self.agent = agent
+        self.app = aiohttp.web.Application()
+        self.app.router.add_route('GET', '/', self.get)
+        loop = asyncio.get_event_loop()
+        server = loop.create_server(self.app.make_handler(), address, port)
+        loop.run_until_complete(server)
 
     @asyncio.coroutine
     def get(self, request):
-        pass
+        nodes = {node: self.agent.get_node(node).statistics() 
+                   for node in self.agent.get_nodes()}
+        return aiohttp.web.Response(body=bytes(json.dumps(nodes), 'utf-8'))
 
 
