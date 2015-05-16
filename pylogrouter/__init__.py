@@ -32,8 +32,9 @@ class HTTPStatisticsReporter():
     def get(self, request):
         nodes = {node: self.agent.get_node(node).statistics() 
                    for node in self.agent.get_nodes()}
-        for task in asyncio.Task.all_tasks():
-            task.print_stack()
-        return aiohttp.web.Response(body=bytes(json.dumps(nodes), 'utf-8'))
+        res = {self.agent.name: nodes}
+        #for task in asyncio.Task.all_tasks():
+        #    task.print_stack()
+        return aiohttp.web.Response(body=bytes(json.dumps(res), 'utf-8'))
 
 

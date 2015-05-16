@@ -4,7 +4,7 @@ import aiohttp
 import json
 
 __all__ = ['RouterNode', 'SyslogSource', 'MemoryPipe', 'PrinterSink',
-           'HTTPSink', 'HTTPSource']
+           'HTTPSink', 'HTTPSource', 'StaticHeader', 'FlumeHTTPSink']
 
 class RouterNode():
 
@@ -108,18 +108,20 @@ class PrinterSink(RouterNode):
     @asyncio.coroutine
     def consume(self, event):
         self.stats['eventsConsumed'] += 1
-#        print(event)
+      #  print(event)
         return True
  
 class HTTPSink(RouterNode):
-    def __init__(self, uri, batchsize=100, n_clients=20, timeout=5):
+    def __init__(self, uri, batchsize=100, batchwait=10, n_clients=20, timeout=5):
         RouterNode.__init__(self)
         self.sem = asyncio.Semaphore(n_clients)
         self.session = aiohttp.ClientSession()
         self.uri = uri
         self.timeout = timeout
         self.batchsize = batchsize
+        self.batchwait = batchwait
         self.events = []
+        self.handle = None
 
     @asyncio.coroutine
     def _handle_response(self, resp, len):
@@ -130,6 +132,13 @@ class HTTPSink(RouterNode):
             self.stats['failedDelivered'] += len
             self.sem.release()
             return False
+        except asyncio.TimeoutError:
+            self.stats['failedDelivered'] += len
+            self.sem.release()
+            return False
+        except asyncio.CancelledError:
+            self.sem.release()
+            return False
         self.sem.release()
         if r.status == 202:
             self.stats['eventsDelivered'] += len
@@ -138,24 +147,50 @@ class HTTPSink(RouterNode):
             self.stats['failedDelivered'] += len
             return False
 
+    def _send_events(self):
+        yield from self.sem.acquire()
+        try:
+            events = self._convert_events(self.events)
+            r = asyncio.wait_for(self.session.request('POST', self.uri, 
+                                 data=events), self.timeout)
+        except asyncio.CancelledError:
+            self.sem.release()
+            return False
+            
+        asyncio.async(self._handle_response(r, len(self.events)))
+        self.events = []
+        if self.handle is not None:
+            self.handle.cancel()
+            self.handle = None
+        return True
+
+    @asyncio.coroutine
+    def _flush_batch(self, wait):
+        yield from asyncio.sleep(wait)
+        yield from self._send_events()
+
+    def _convert_events(self, events):
+        return json.dumps(events)
+
     @asyncio.coroutine
     def consume(self, event):
         self.stats['eventsConsumed'] += 1
         self.events.append(event)
         if len(self.events) > self.batchsize:
-            yield from self.sem.acquire()
-            try:
-                r = asyncio.wait_for(self.session.request('POST', self.uri, 
-                                     data=json.dumps(self.events)), self.timeout)
-            except asyncio.TimeoutError:
-                self.stats['failedDelivered'] += len
-                self.sem.release()
-                return False
-                
-                
-            asyncio.async(self._handle_response(r, len(self.events)))
-            self.events = []
+            return self._send_events()
+        else:
+            if self.handle is None:
+                self.handle = asyncio.async(self._flush_batch(self.batchwait))
+ 
         return True
+
+class FlumeHTTPSink(HTTPSink):
+    def __init__(self, uri, batchsize=100, batchwait=10, n_clients=20, timeout=5):
+        HTTPSink.__init__(self, uri, batchsize, batchwait, n_clients, timeout)
+
+    def _convert_events(self, events):
+        return json.dumps([{"headers": event, "body": "none"}  \
+                           for event in events])
 
 class HTTPSource(RouterNode):
     def __init__(self, address, port):
@@ -179,3 +214,13 @@ class HTTPSource(RouterNode):
         except ValueError:
             self.stats['failedConsumed'] += 1
             return aiohttp.web.HTTPBadRequest()
+
+class StaticHeader(RouterNode):
+    def __init__(self, header, value):
+        RouterNode.__init__(self)
+        self.header = {header: value}
+
+    @asyncio.coroutine
+    def consume(self, event):
+        event.update(self.header)
+        yield from RouterNode.deliver(self, event)
