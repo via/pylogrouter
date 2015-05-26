@@ -2,6 +2,8 @@ import aiohttp.web
 import asyncio
 import json
 
+__all__ = ['Agent', 'HTTPStatisticsReporter']
+
 class Agent():
     def __init__(self, name):
         self.name = name
@@ -18,6 +20,9 @@ class Agent():
 
     def get_node(self, name):
         return self.nodes[name]
+
+    def run(self):
+        asyncio.get_event_loop().run_forever()        
 
 class HTTPStatisticsReporter():
     def __init__(self, address, port, agent):

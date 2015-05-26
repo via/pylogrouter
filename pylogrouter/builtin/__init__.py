@@ -53,13 +53,14 @@ class SyslogWrapper(pysyslog.SyslogProtocol):
         self.source.overflow()
 
 class SyslogSource(pysyslog.SyslogProtocol, RouterNode):
-    def __init__(self, address, tcp=False):
+    def __init__(self, address, port, tcp=False):
+        port=int(port)
         RouterNode.__init__(self)
         self.loop = asyncio.get_event_loop()
         if tcp:
-            self.coro = self.loop.create_server(lambda: SyslogWrapper(self), address[0], address[1])
+            self.coro = self.loop.create_server(lambda: SyslogWrapper(self), address, port)
         else:
-            self.coro = self.loop.create_datagram_endpoint(lambda: SyslogWrapper(self), address)
+            self.coro = self.loop.create_datagram_endpoint(lambda: SyslogWrapper(self), (address, port))
         self.loop.run_until_complete(self.coro)
 
     def handle_event(self, event):
@@ -73,10 +74,11 @@ class SyslogSource(pysyslog.SyslogProtocol, RouterNode):
         self.stats['failedConsumed'] += 1
 
 class MemoryPipe(RouterNode):
-    def __init__(self, size):
+    def __init__(self, capacity):
         RouterNode.__init__(self)
-        self.pipe = asyncio.Queue(size) 
-        self.stats.update({"maxCapacity": size})
+        capacity=int(capacity)
+        self.pipe = asyncio.Queue(capacity) 
+        self.stats.update({"maxCapacity": capacity})
         self.dequeuer = asyncio.async(self.dequeue())
 
     @asyncio.coroutine
@@ -108,18 +110,18 @@ class PrinterSink(RouterNode):
     @asyncio.coroutine
     def consume(self, event):
         self.stats['eventsConsumed'] += 1
-      #  print(event)
+        print(event)
         return True
  
 class HTTPSink(RouterNode):
     def __init__(self, uri, batchsize=100, batchwait=10, n_clients=20, timeout=5):
         RouterNode.__init__(self)
-        self.sem = asyncio.Semaphore(n_clients)
+        self.sem = asyncio.Semaphore(int(n_clients))
         self.session = aiohttp.ClientSession()
         self.uri = uri
-        self.timeout = timeout
-        self.batchsize = batchsize
-        self.batchwait = batchwait
+        self.timeout = float(timeout)
+        self.batchsize = int(batchsize)
+        self.batchwait = int(batchwait)
         self.events = []
         self.handle = None
 
@@ -198,7 +200,7 @@ class HTTPSource(RouterNode):
         self.app = aiohttp.web.Application()
         self.app.router.add_route('POST', '/', self.post)
         loop = asyncio.get_event_loop()
-        server = loop.create_server(self.app.make_handler(), address, port)
+        server = loop.create_server(self.app.make_handler(), address, int(port))
         loop.run_until_complete(server)
 
     @asyncio.coroutine
